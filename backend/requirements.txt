@@ -1,0 +1,11 @@
+fastapi
+uvicorn[standard]
+python-socketio
+langgraph
+langchain
+langchain-ollama
+langchain-community
+pdfplumber
+httpx
+python-dotenv
+aiosqlite
