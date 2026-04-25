@@ -8,6 +8,7 @@ from pydantic import BaseModel
 
 from agents.policy_parser import parse_policy
 from agents.spawner import spawn_agents
+from agents.runner import run_simulation
 
 app = FastAPI()
 
@@ -28,13 +29,9 @@ class SimulateRequest(BaseModel):
 async def start_simulation(body: SimulateRequest):
     policy = await parse_policy(body.policy_text, source="text")
     agents_by_id = await spawn_agents(body.n_agents, policy)
+    asyncio.create_task(run_simulation(agents_by_id, policy))
     agents = [a.identity for a in agents_by_id.values()]
     return {"policy": policy, "agents": agents}
-
-async def round_timer_loop(sim_id: str, round_duration_seconds: int = 120):
-    NUM_ROUNDS = 10
-    for _ in range(NUM_ROUNDS):
-        await asyncio.sleep(round_duration_seconds)
 
 if __name__ == "__main__":
     import uvicorn

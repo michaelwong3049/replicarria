@@ -4,8 +4,10 @@ import uuid
 import random
 import os
 import anthropic
+from anthropic.types import TextBlock
 from typing import Literal
 
+from agents.loop import agent_graph
 from agents.agent import Agent, AgentIdentity, AgentPersonality, AgentBeliefs, AgentSocial, AgentPosition
 from agents.policy_parser import PolicyContext
 
@@ -46,30 +48,34 @@ async def spawn_single_agent(policy: PolicyContext, archetype: str, layer: Liter
             "role": "user",
             "content": f"""Generate a Terraria NPC character who lives in this world and has just heard about a new policy.
 
-Archetype: {archetype}
-Layer: {layer}
-Policy summary: {policy["summary"]}
-Affected groups: {", ".join(policy["affected_archetypes"])}
+            Archetype: {archetype}
+            Layer: {layer}
+            Policy summary: {policy["summary"]}
+            Affected groups: {", ".join(policy["affected_archetypes"])}
 
-Return a JSON object with exactly these fields:
-- name: string (a fitting Terraria-style name)
-- age: integer (18-70)
-- occupation: string (specific job title fitting the archetype)
-- income_bracket: one of "low", "middle", "high"
-- personality_description: string (2-4 words, e.g. "stubborn and pragmatic")
-- communication_style: one of "aggressive", "passive", "persuasive", "logical"
-- emotional_volatility: float 0.0-1.0 (how much conversations move them)
-- political_lean: float -1.0 to 1.0 (left to right)
-- economic_outlook: float -1.0 to 1.0 (dire to optimistic)
-- policy_stance: float -1.0 to 1.0 (oppose to support, based on how this policy affects them)
-- mood: one of "optimistic", "anxious", "angry", "neutral", "hopeful"
-- starting_memory: string (one sentence — their first reaction to hearing about this policy)
+            Return a JSON object with exactly these fields:
+            - name: string (a fitting Terraria-style name)
+            - age: integer (18-70)
+            - occupation: string (specific job title fitting the archetype)
+            - income_bracket: one of "low", "middle", "high"
+            - personality_description: string (2-4 words, e.g. "stubborn and pragmatic")
+            - communication_style: one of "aggressive", "passive", "persuasive", "logical"
+            - emotional_volatility: float 0.0-1.0 (how much conversations move them)
+            - political_lean: float -1.0 to 1.0 (left to right)
+            - economic_outlook: float -1.0 to 1.0 (dire to optimistic)
+            - policy_stance: float -1.0 to 1.0 (oppose to support, based on how this policy affects them)
+            - policy_opinion: string (one sentence explaining why they hold that stance)
+            - mood: one of "optimistic", "anxious", "angry", "neutral", "hopeful"
+            - starting_memory: string (one sentence — their first reaction to hearing about this policy)
 
-Return only valid JSON, no other text."""
+            Return only valid JSON, no other text."""
         }]
     )
 
-    raw = response.content[0].text.strip()
+    block = response.content[0]
+    if not isinstance(block, TextBlock):
+        raise Exception(f"Unexpected response block type: {type(block)}")
+    raw = block.text.strip()
     if not raw:
         raise Exception(f"Empty response spawning agent {archetype}/{layer}")
     if raw.startswith("```"):
@@ -79,7 +85,7 @@ Return only valid JSON, no other text."""
 
     d = json.loads(raw)
 
-    return Agent(
+    agent = Agent(
         identity=AgentIdentity(
             id=str(uuid.uuid4()),
             name=d["name"],
@@ -98,6 +104,7 @@ Return only valid JSON, no other text."""
             political_lean=float(d["political_lean"]),
             economic_outlook=float(d["economic_outlook"]),
             policy_stance=float(d["policy_stance"]),
+            policy_opinion=d["policy_opinion"],
             mood=d["mood"],
         ),
         social=AgentSocial(
@@ -112,6 +119,29 @@ Return only valid JSON, no other text."""
         reflections=[],
     )
 
+    await agent_graph.ainvoke(
+        {
+            "agent_id": agent.id,
+            "name": agent.identity["name"],
+            "occupation": agent.identity["occupation"],
+            "personality": agent.personality["description"],
+            "communication_style": agent.personality["communication_style"],
+            "emotional_volatility": agent.personality["emotional_volatility"],
+            "mood": agent.beliefs["mood"],
+            "policy_stance": agent.beliefs["policy_stance"],
+            "policy_opinion": agent.beliefs["policy_opinion"],
+            "policy_summary": policy["summary"],
+            "memory_stream": [],
+            "reflections": [],
+            "cumulative_importance": 0.0,
+            "round_events": [],
+            "top_memories": [],
+        },
+        config={"configurable": {"thread_id": agent.id}}
+    )
+
+    return agent
+
 
 async def spawn_agents(n: int, policy: PolicyContext) -> dict[str, Agent]:
     archetypes = distribute_archetypes(n, policy["affected_archetypes"])
@@ -123,3 +153,4 @@ async def spawn_agents(n: int, policy: PolicyContext) -> dict[str, Agent]:
     ])
 
     return {agent.id: agent for agent in agents}
+
