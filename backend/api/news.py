@@ -29,7 +29,12 @@ async def get_news():
 
     articles = r.json().get('articles', [])
     result = [
-        {'source': a['source']['name'], 'title': a['title'], 'url': a.get('url', '')}
+        {
+            'source': a['source']['name'],
+            'title': a['title'],
+            'description': a.get('description') or '',
+            'url': a.get('url', ''),
+        }
         for a in articles
         if a.get('title') and '[Removed]' not in a['title']
     ][:6]

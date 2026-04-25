@@ -3,12 +3,6 @@
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 
-const MOCK_HEADLINES = [
-  { id: 1, source: 'Reuters', title: 'Federal Reserve holds rates steady amid inflation concerns' },
-  { id: 2, source: 'BBC News', title: 'New minimum wage bill passes Senate committee vote' },
-  { id: 3, source: 'AP News', title: 'US announces sweeping new tariffs on imported goods' },
-]
-
 const SCAN_SOURCES = ['Reuters', 'BBC News', 'AP News']
 
 type Screen = 'menu' | 'source' | 'scanning' | 'headlines' | 'upload' | 'configure' | 'history' | 'about'
@@ -18,7 +12,9 @@ export default function Home() {
   const router = useRouter()
   const [screen, setScreen] = useState<Screen>('menu')
   const [scanIndex, setScanIndex] = useState(0)
-  const [, setSelectedHeadline] = useState<number | null>(null)
+  const [headlines, setHeadlines] = useState<{ source: string; title: string; description: string }[]>([])
+  const [selectedHeadline, setSelectedHeadline] = useState<string | null>(null)
+  const [uploadedFile, setUploadedFile] = useState<File | null>(null)
   const [memory, setMemory] = useState<Memory>('fresh')
   const [duration, setDuration] = useState(3)
 
@@ -32,9 +28,20 @@ export default function Home() {
     return () => clearTimeout(t)
   }, [screen, scanIndex])
 
-  function startScan() {
+  async function startScan() {
     setScanIndex(0)
     setScreen('scanning')
+    try {
+      const res = await fetch('http://localhost:8000/news')
+      const data = await res.json()
+      setHeadlines(data)
+    } catch {
+      setHeadlines([
+        { source: 'Reuters', title: 'Federal Reserve holds rates steady amid inflation concerns', description: 'The Fed kept interest rates unchanged as policymakers weigh persistent inflation against slowing growth.' },
+        { source: 'BBC News', title: 'New minimum wage bill passes Senate committee vote', description: 'The bill would raise the federal minimum wage to $17 per hour over three years, affecting millions of workers.' },
+        { source: 'AP News', title: 'US announces sweeping new tariffs on imported goods', description: 'The administration imposed 25% tariffs on steel and aluminum imports, citing national security concerns.' },
+      ])
+    }
   }
 
   return (
@@ -117,20 +124,22 @@ export default function Home() {
 
         {screen === 'headlines' && (
           <div className="flex flex-col gap-3 w-full">
-            {MOCK_HEADLINES.map(h => (
-              <button
-                key={h.id}
-                onClick={() => { setSelectedHeadline(h.id); setScreen('configure') }}
-                className="pixel-card p-3 text-left w-full"
-              >
-                <span className="pixel-text text-[11px] block mb-1" style={{ color: '#6a5a30' }}>
-                  {h.source}
-                </span>
-                <span className="pixel-text text-[12px] leading-relaxed block" style={{ color: '#d4c080' }}>
-                  {h.title}
-                </span>
-              </button>
-            ))}
+            <div className="flex flex-col gap-2 overflow-y-auto" style={{ maxHeight: '55vh' }}>
+              {headlines.map((h, i) => (
+                <button
+                  key={i}
+                  onClick={() => { setSelectedHeadline(`${h.title}. ${h.description}`); setScreen('configure') }}
+                  className="pixel-card p-3 text-left w-full"
+                >
+                  <span className="pixel-text text-[11px] block mb-1" style={{ color: '#6a5a30' }}>
+                    {h.source}
+                  </span>
+                  <span className="pixel-text text-[12px] leading-relaxed block" style={{ color: '#d4c080' }}>
+                    {h.title}
+                  </span>
+                </button>
+              ))}
+            </div>
             <BackButton onClick={() => setScreen('source')} />
           </div>
         )}
@@ -138,8 +147,11 @@ export default function Home() {
         {screen === 'upload' && (
           <div className="flex flex-col items-center gap-5 mt-4 w-full">
             <label className="pixel-menu-btn cursor-pointer text-center block w-full">
-              CHOOSE PDF FILE
-              <input type="file" accept=".pdf" className="hidden" onChange={() => setScreen('configure')} />
+              {uploadedFile ? uploadedFile.name : 'CHOOSE FILE'}
+              <input type="file" accept=".pdf,.csv,.txt" className="hidden" onChange={e => {
+                const f = e.target.files?.[0]
+                if (f) { setUploadedFile(f); setSelectedHeadline(f.name); setScreen('configure') }
+              }} />
             </label>
             <BackButton onClick={() => setScreen('source')} />
           </div>
@@ -192,7 +204,24 @@ export default function Home() {
               </div>
             </div>
 
-            <MenuButton onClick={() => router.push('/simulation')}>START SIMULATION</MenuButton>
+            <MenuButton onClick={async () => {
+              sessionStorage.setItem('sim_headline', selectedHeadline ?? '')
+              sessionStorage.setItem('sim_months', String(duration))
+              if (uploadedFile) {
+                const form = new FormData()
+                form.append('file', uploadedFile)
+                form.append('months', String(duration))
+                form.append('use_memory', String(memory === 'living'))
+                await fetch('http://localhost:8000/simulate/upload', { method: 'POST', body: form }).catch(() => {})
+              } else {
+                await fetch('http://localhost:8000/simulate', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ policy_text: selectedHeadline ?? '', months: duration, use_memory: memory === 'living' }),
+                }).catch(() => {})
+              }
+              router.push('/simulation')
+            }}>START SIMULATION</MenuButton>
             <BackButton onClick={() => setScreen('headlines')} />
           </div>
         )}
