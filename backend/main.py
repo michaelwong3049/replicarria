@@ -2,38 +2,159 @@ import asyncio
 from dotenv import load_dotenv
 load_dotenv()
 
-from fastapi import FastAPI
+import socketio
+from fastapi import FastAPI, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from api.news import router as news_router
-from agents.policy_parser import parse_policy
-from agents.spawner import spawn_agents
-from agents.runner import run_simulation
 
 fastapi_app = FastAPI()
-
-fastapi_app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
+fastapi_app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 fastapi_app.include_router(news_router)
 
 sio = socketio.AsyncServer(async_mode='asgi', cors_allowed_origins='*')
 app = socketio.ASGIApp(sio, fastapi_app)
 
+
+class SimulateRequest(BaseModel):
+    policy_text: str
+    n_agents: int = 12
+    months: int = 3
+    use_memory: bool = False
+    speed: float = 1.0
+
+
 @fastapi_app.post('/simulate')
 async def start_simulation(body: SimulateRequest):
-    policy = await parse_policy(body.policy_text, source="text")
-    agents_by_id = await spawn_agents(body.n_agents, policy)
-    asyncio.create_task(run_simulation(agents_by_id, policy))
-    agents = [a.identity for a in agents_by_id.values()]
-    return {"policy": policy, "agents": agents}
+    asyncio.create_task(stream_simulation(body))
+    return {'status': 'started'}
 
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
 
+@fastapi_app.post('/simulate/upload')
+async def start_simulation_upload(
+    file: UploadFile = File(...),
+    months: int = Form(3),
+    use_memory: bool = Form(False),
+):
+    contents = await file.read()
+    body = SimulateRequest(
+        policy_text=contents.decode('utf-8', errors='ignore'),
+        months=months,
+        use_memory=use_memory,
+    )
+    asyncio.create_task(stream_simulation(body))
+    return {'status': 'started'}
+
+
+async def stream_simulation(body: SimulateRequest):
+    try:
+        from agents.policy_parser import parse_policy
+        from agents.spawner import spawn_agents
+        from agents.loop import agent_graph
+        from agents.runner import build_round_events
+
+        policy = await parse_policy(body.policy_text, source='text')
+        agents_by_id = await spawn_agents(body.n_agents, policy)
+
+        round_seconds = 60.0 / body.speed
+        n_agents = len(agents_by_id)
+
+        unemployment = 5.4
+        social_unrest = 12.0
+        gov_approval = 56.0
+        prices = 2.1
+        businesses_open = 95.0
+
+        for round_num in range(1, body.months + 1):
+            round_events = build_round_events(round_num, policy)
+
+            await asyncio.gather(*[
+                agent_graph.ainvoke(
+                    {"round_events": round_events},
+                    config={"configurable": {"thread_id": agent_id}}
+                )
+                for agent_id in agents_by_id
+            ])
+
+            stances = []
+            for agent_id, agent in agents_by_id.items():
+                state = agent_graph.get_state({"configurable": {"thread_id": agent_id}})
+                if not state.values:
+                    continue
+                v = state.values
+                stances.append(v.get("policy_stance", 0.0))
+
+                await sio.emit('agent_speak', {
+                    'type': 'agent_speak',
+                    'agent_id': agent_id,
+                    'name': v.get("name", agent.identity['name']),
+                    'role': v.get("occupation", agent.identity['occupation']),
+                    'photo_url': agent.identity.get('photo_url', ''),
+                    'x': agent.position['x'],
+                    'y': agent.position['y'],
+                    'text': v.get("policy_opinion", ""),
+                    'mood': v.get("mood", "neutral"),
+                })
+                await asyncio.sleep(0.3)
+
+            if stances:
+                avg_stance = sum(stances) / len(stances)
+                state_list = [
+                    agent_graph.get_state({"configurable": {"thread_id": aid}}).values
+                    for aid in agents_by_id
+                ]
+                moods = [s.get("mood", "neutral") for s in state_list if s]
+                upset = sum(1 for m in moods if m in ("angry", "anxious")) / max(len(moods), 1)
+
+                gov_approval = max(0, min(100, (avg_stance + 1) / 2 * 100))
+                social_unrest = min(100, upset * 100 + round_num * 2)
+                unemployment = max(0, 5.4 - avg_stance * 3 + round_num * 0.3)
+                prices = max(0, 2.1 + (1 - avg_stance) * 0.5 * round_num)
+                businesses_open = max(0, 95 - social_unrest * 0.2)
+
+            await sio.emit('economic_update', {
+                'type': 'economic_update',
+                'round': round_num,
+                'month': f"Month {round_num}",
+                'unemployment': round(unemployment, 1),
+                'social_unrest': round(social_unrest, 1),
+                'gov_approval': round(gov_approval, 1),
+                'prices': round(prices / 100, 3),
+                'businesses_open': round(businesses_open, 1),
+            })
+
+            if round_num < body.months:
+                await asyncio.sleep(round_seconds)
+
+        final_stance = sum(stances) / len(stances) if stances else 0.0
+        verdict = "positive" if final_stance > 0.2 else "negative" if final_stance < -0.2 else "mixed"
+
+        await sio.emit('simulation_end', {
+            'type': 'simulation_end',
+            'verdict': verdict,
+            'summary': f"After {body.months} months, the policy resulted in a {verdict} outcome.",
+            'key_moments': [],
+            'final_indices': {
+                'unemployment': round(unemployment, 1),
+                'social_unrest': round(social_unrest, 1),
+                'gov_approval': round(gov_approval, 1),
+                'prices': round(prices, 2),
+                'businesses_open': round(businesses_open, 1),
+            }
+        })
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        await sio.emit('error', {'message': str(e)})
+
+
+@sio.event
+async def connect(sid, environ):
+    print(f'client connected: {sid}')
+
+
+@sio.event
+async def disconnect(sid):
+    print(f'client disconnected: {sid}')
