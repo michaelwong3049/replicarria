@@ -9,3 +9,4 @@ pdfplumber
 httpx
 python-dotenv
 aiosqlite
+anthropic
