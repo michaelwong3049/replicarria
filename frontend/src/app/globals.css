@@ -1,26 +1,130 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
-
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+  --font-pixel: "Press Start 2P", monospace;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: #0a0a0a;
+  color: #ededed;
+}
+
+.pixel-text {
+  font-family: var(--font-pixel);
+  line-height: 1.8;
+}
+
+.pixel-panel {
+  background: rgba(22, 14, 6, 0.93);
+  border: 3px solid #6d5a2c;
+  box-shadow:
+    inset 2px 2px 0 0 rgba(255, 220, 120, 0.08),
+    inset -2px -2px 0 0 rgba(0, 0, 0, 0.7),
+    0 0 0 2px #000;
+}
+
+.pixel-btn {
+  font-family: var(--font-pixel);
+  background: rgba(30, 28, 20, 0.9);
+  border: 3px solid #6d5a2c;
+  color: #e8d5a0;
+  box-shadow:
+    inset 2px 2px 0 0 rgba(255, 255, 255, 0.1),
+    inset -2px -2px 0 0 rgba(0, 0, 0, 0.5),
+    0 0 0 1px #000;
+  cursor: pointer;
+  transition: background 0.1s;
+}
+
+.pixel-btn:hover:not(:disabled) {
+  background: rgba(60, 52, 30, 0.95);
+}
+
+.pixel-btn:active:not(:disabled) {
+  box-shadow:
+    inset -2px -2px 0 0 rgba(255, 255, 255, 0.1),
+    inset 2px 2px 0 0 rgba(0, 0, 0, 0.5),
+    0 0 0 1px #000;
+}
+
+.pixel-btn-sm {
+  font-family: var(--font-pixel);
+  background: rgba(20, 20, 30, 0.9);
+  border: 2px solid #4a3f22;
+  color: #c8b880;
+  box-shadow:
+    inset 1px 1px 0 0 rgba(255, 255, 255, 0.08),
+    inset -1px -1px 0 0 rgba(0, 0, 0, 0.5);
+  cursor: pointer;
+  transition: background 0.1s;
+}
+
+.pixel-btn-sm:hover {
+  background: rgba(40, 36, 20, 0.95);
+}
+
+.pixel-card {
+  background: rgba(20, 20, 35, 0.85);
+  border: 2px solid #3a3520;
+  box-shadow: inset 1px 1px 0 0 rgba(255, 255, 255, 0.05);
+  transition: border-color 0.15s, background 0.15s;
+  cursor: pointer;
+  width: 100%;
+}
+
+.pixel-card:hover {
+  border-color: #6d5a2c;
+  background: rgba(35, 30, 15, 0.9);
+}
+
+.pixel-menu-btn {
+  font-family: var(--font-pixel);
+  font-size: 15px;
+  color: #d4ccb0;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  text-align: center;
+  padding: 8px 0;
+  text-shadow: 0 3px 0 #000, 0 5px 0 #000;
+  transition: color 0.1s, text-shadow 0.1s;
+  letter-spacing: 0.05em;
+}
+
+.pixel-menu-btn:hover {
+  color: #fff9c0;
+  text-shadow: 0 0 16px #f5d76e, 0 3px 0 #7c5200, 0 5px 0 #000;
+}
+
+.pixel-back-btn {
+  font-family: var(--font-pixel);
+  font-size: 11px;
+  color: #a89060;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  padding: 4px 0;
+  text-shadow: 0 2px 0 #000, 0 0 4px #000;
+  transition: color 0.1s;
+}
+
+.pixel-back-btn:hover {
+  color: #e8d090;
+}
+
+.log-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: #6d5a2c transparent;
+}
+
+.log-scroll::-webkit-scrollbar {
+  width: 3px;
+}
+
+.log-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.log-scroll::-webkit-scrollbar-thumb {
+  background: #6d5a2c;
 }
