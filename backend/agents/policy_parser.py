@@ -1,6 +1,7 @@
 import json
 import os
 import anthropic
+from anthropic.types import TextBlock
 from typing import List, Optional, TypedDict, Literal
 
 class PolicyContext(TypedDict):
@@ -32,7 +33,10 @@ Return only valid JSON, no other text."""
         }]
     )
 
-    raw = response.content[0].text.strip()
+    block = response.content[0]
+    if not isinstance(block, TextBlock):
+        raise Exception(f"Unexpected response block type: {type(block)}")
+    raw = block.text.strip()
     if not raw:
         raise Exception("Empty response from policy parser")
     if raw.startswith("```"):

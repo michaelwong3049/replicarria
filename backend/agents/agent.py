@@ -22,6 +22,7 @@ class AgentBeliefs(TypedDict):
     political_lean: float       # -1.0 (left) to 1.0 (right)
     economic_outlook: float     # -1.0 (dire) to 1.0 (optimistic)
     policy_stance: float        # -1.0 (oppose) to 1.0 (support)
+    policy_opinion: str         # one sentence explaining their stance
     mood: str                   # "optimistic", "anxious", "angry", etc.
 
 class AgentSocial(TypedDict):
@@ -36,7 +37,7 @@ class Memory(TypedDict):
     id: str
     content: str
     importance: float           # 1–10
-    timestamp: datetime
+    timestamp: str
     keywords: List[str]
     reflected: bool             # has this been synthesized into a reflection
 
