@@ -1,17 +1,20 @@
 'use client'
 
 import { useEffect, useRef } from 'react'
+import { bridge } from '@/lib/eventBridge'
 
 const NPC_CONFIGS = [
-  { name: 'Maria Santos',  personRow: 11 },
-  { name: 'James Okafor', personRow: 12 },
-  { name: 'Priya Nair',   personRow: 13 },
-  { name: 'Chen Wei',     personRow: 14 },
-  { name: 'Sofia Rossi',  personRow: 11 },
+  { personRow: 11 },
+  { personRow: 12 },
+  { personRow: 13 },
+  { personRow: 14 },
+  { personRow: 12 },
+  { personRow: 13 },
+  { personRow: 11 },
 ]
 
 const TILESET_COLS = 24
-const PERSON_COL   = 19
+const PERSON_COL = 19
 
 const ROAD_TILES = new Set([
   264, 265, 266, 267, 268, 269, 270, 271, 272, 273, 274,
@@ -20,26 +23,41 @@ const ROAD_TILES = new Set([
   336, 337, 338, 339, 340, 341, 342, 343, 344, 345, 346,
 ])
 
-const SPEECHES = [
-  'Prices keep rising...',
-  'Need better jobs.',
-  'Policy ignored us.',
-  'Things are looking up!',
-  "Can't afford rent.",
-  'Business is slow.',
-  'We deserve better.',
-  'Hope things improve.',
-  'Government must act.',
-  'Community is strong.',
+const CONVO_LINES = [
+  'What do you think about all this?',
+  'Things have been rough lately.',
+  'I heard prices are going up again.',
+  'At least the community is holding together.',
+  'The government needs to do more.',
+  'I worry about what comes next.',
+  'People like us always get hit hardest.',
+  'Maybe things will turn around.',
 ]
 
-const HOP_RADIUS        = 48
-const NPC_SPEED_PX      = 14
-const CONVO_TRIGGER_PX  = 14
-const CONVO_COOLDOWN_MS = 20_000
+const MOOD_INT: Record<string, number> = {
+  angry: 0xe03030, anxious: 0xd4943a, frustrated: 0xe07050,
+  hopeful: 0x6aaa50, optimistic: 0x6aaa50, neutral: 0xa09878,
+}
+const MOOD_STR: Record<string, string> = {
+  angry: '#e03030', anxious: '#d4943a', frustrated: '#e07050',
+  hopeful: '#6aaa50', optimistic: '#6aaa50', neutral: '#a09878',
+}
+
+const HOP_RADIUS = 48
+const NPC_SPEED_PX = 14
+const CONVO_TRIGGER_PX = 14
+const CONVO_COOLDOWN_MS = 55_000
 
 function frameOf(row: number, col: number) {
   return row * TILESET_COLS + col
+}
+
+interface Opinion {
+  npcIdx: number
+  text: string
+  name: string
+  role: string
+  mood: string
 }
 
 export default function GameCanvas() {
@@ -49,6 +67,7 @@ export default function GameCanvas() {
     if (!containerRef.current) return
 
     let game: InstanceType<typeof import('phaser')['Game']>
+    let agentSpeakCleanup: (() => void) | null = null
 
     async function init() {
       const Phaser = await import('phaser')
@@ -64,6 +83,9 @@ export default function GameCanvas() {
           lastTalkedAt: number
         }> = []
         private roadWaypoints: Array<{ x: number; y: number }> = []
+        private agentNpcMap = new Map<string, number>()
+        private npcCursor = 0
+        private opinionPool: Opinion[] = []
 
         constructor() {
           super({ key: 'CityScene' })
@@ -116,7 +138,6 @@ export default function GameCanvas() {
 
           const cam = this.cameras.main
           cam.setBackgroundColor('#1a1a2e')
-
           const zoom = Math.max(
             this.scale.width / map.widthInPixels,
             this.scale.height / map.heightInPixels
@@ -136,6 +157,50 @@ export default function GameCanvas() {
             : [{ x: 44, y: 44 }, { x: 84, y: 44 }, { x: 44, y: 84 }, { x: 84, y: 84 }]
 
           this.spawnNPCs(waypoints)
+
+          const onAgentSpeak = (data: { agent_id: string; name: string; role: string; text: string; mood: string }) => {
+            if (!this.agentNpcMap.has(data.agent_id)) {
+              this.agentNpcMap.set(data.agent_id, this.npcCursor % NPC_CONFIGS.length)
+              this.npcCursor++
+            }
+            const idx = this.agentNpcMap.get(data.agent_id)!
+            const snippet = data.text.length > 80 ? data.text.slice(0, 77) + '...' : data.text
+            const entry: Opinion = { npcIdx: idx, text: snippet, name: data.name, role: data.role, mood: data.mood }
+            const existing = this.opinionPool.findIndex(o => o.npcIdx === idx)
+            if (existing >= 0) this.opinionPool[existing] = entry
+            else this.opinionPool.push(entry)
+          }
+          bridge.on('agent_speak', onAgentSpeak)
+          agentSpeakCleanup = () => bridge.off('agent_speak', onAgentSpeak)
+
+          this.time.addEvent({
+            delay: 4800,
+            loop: true,
+            callback: () => {
+              const available = this.opinionPool.filter(o => !this.npcs[o.npcIdx]?.inConversation)
+              if (available.length === 0) return
+              const op = available[Math.floor(Math.random() * available.length)]
+              this.showSpeechBubble(op.npcIdx, op.text, op.name, op.role, op.mood)
+            },
+          })
+
+          this.time.addEvent({
+            delay: 7500,
+            loop: true,
+            startAt: 3100,
+            callback: () => {
+              const available = this.opinionPool.filter(o => !this.npcs[o.npcIdx]?.inConversation)
+              if (available.length === 0) return
+              const others = this.npcs
+                .map((_, i) => i)
+                .filter(i => !this.npcs[i].inConversation && !this.opinionPool.find(o => o.npcIdx === i))
+              const pick = others.length > 0
+                ? others[Math.floor(Math.random() * others.length)]
+                : available[Math.floor(Math.random() * available.length)].npcIdx
+              const op = this.opinionPool.find(o => o.npcIdx !== pick) ?? available[0]
+              if (op) this.showSpeechBubble(pick, op.text, op.name, op.role, op.mood)
+            },
+          })
         }
 
         private randomWaypoint(waypoints: Array<{ x: number; y: number }>) {
@@ -153,7 +218,6 @@ export default function GameCanvas() {
             return Math.sqrt(dx * dx + dy * dy) <= HOP_RADIUS
           })
           if (candidates.length === 0) return this.randomWaypoint(waypoints)
-
           candidates.sort((a, b) =>
             Math.hypot(a.x - dest.x, a.y - dest.y) - Math.hypot(b.x - dest.x, b.y - dest.y)
           )
@@ -166,7 +230,6 @@ export default function GameCanvas() {
             const start = this.randomWaypoint(waypoints)
             const sprite = this.add.sprite(start.x, start.y, 'chars', frameOf(cfg.personRow, PERSON_COL))
             sprite.setDepth(start.y + 10)
-
             this.npcs.push({
               sprite,
               npcIndex: i,
@@ -176,7 +239,6 @@ export default function GameCanvas() {
               inConversation: false,
               lastTalkedAt: 0,
             })
-
             this.time.delayedCall(i * 600 + 300, () => this.step(i, waypoints))
           })
         }
@@ -186,13 +248,11 @@ export default function GameCanvas() {
           if (!npc || npc.inConversation) return
 
           const from = { x: npc.sprite.x, y: npc.sprite.y }
-
           if (Math.hypot(npc.destination.x - from.x, npc.destination.y - from.y) < HOP_RADIUS) {
             npc.destination = this.randomWaypoint(waypoints)
           }
 
           const target = this.nextHopToward(from, npc.destination, waypoints)
-
           npc.sprite.play(`walk_${npcIndex}`)
           npc.sprite.setFlipX(target.x < from.x)
 
@@ -222,31 +282,33 @@ export default function GameCanvas() {
 
           a.inConversation = true
           b.inConversation = true
-
           a.currentTween?.stop()
           b.currentTween?.stop()
           a.sprite.stop()
           b.sprite.stop()
           a.sprite.setFrame(frameOf(NPC_CONFIGS[aIdx].personRow, PERSON_COL))
           b.sprite.setFrame(frameOf(NPC_CONFIGS[bIdx].personRow, PERSON_COL))
-
           a.sprite.setFlipX(b.sprite.x < a.sprite.x)
           b.sprite.setFlipX(a.sprite.x < b.sprite.x)
 
-          const lines = [
-            { speaker: aIdx, text: SPEECHES[Math.floor(Math.random() * SPEECHES.length)] },
-            { speaker: bIdx, text: SPEECHES[Math.floor(Math.random() * SPEECHES.length)] },
-            { speaker: aIdx, text: SPEECHES[Math.floor(Math.random() * SPEECHES.length)] },
-            { speaker: bIdx, text: SPEECHES[Math.floor(Math.random() * SPEECHES.length)] },
+          const rnd = () => CONVO_LINES[Math.floor(Math.random() * CONVO_LINES.length)]
+          const aOp = this.opinionPool.find(o => o.npcIdx === aIdx)
+          const bOp = this.opinionPool.find(o => o.npcIdx === bIdx)
+
+          const lines: Array<{ speaker: number; text: string; name?: string; role?: string; mood?: string }> = [
+            { speaker: aIdx, text: aOp?.text ?? rnd(), name: aOp?.name, role: aOp?.role, mood: aOp?.mood },
+            { speaker: bIdx, text: bOp?.text ?? rnd(), name: bOp?.name, role: bOp?.role, mood: bOp?.mood },
+            { speaker: aIdx, text: rnd() },
+            { speaker: bIdx, text: rnd() },
           ]
 
           lines.forEach((line, i) => {
-            this.time.delayedCall(i * 2800, () => {
-              this.showSpeechBubble(line.speaker, line.text)
+            this.time.delayedCall(i * 3200, () => {
+              this.showSpeechBubble(line.speaker, line.text, line.name, line.role, line.mood)
             })
           })
 
-          this.time.delayedCall(lines.length * 2800, () => {
+          this.time.delayedCall(lines.length * 3200, () => {
             const now = Date.now()
             a.inConversation = false
             b.inConversation = false
@@ -257,37 +319,65 @@ export default function GameCanvas() {
           })
         }
 
-        private showSpeechBubble(npcIndex: number, text: string) {
+        private showSpeechBubble(npcIndex: number, text: string, name?: string, _role?: string, mood?: string) {
           const npc = this.npcs[npcIndex]
           if (!npc) return
 
           npc.bubble?.destroy()
           npc.bubble = null
 
-          const label = this.add.text(0, 0, text, {
+          const accentStr = mood ? (MOOD_STR[mood] ?? '#a09878') : '#a09878'
+          const accentInt = mood ? (MOOD_INT[mood] ?? 0xa09878) : 0xa09878
+          const pad = 3
+          const WRAP = 46
+
+          let headerText: Phaser.GameObjects.Text | null = null
+          if (name) {
+            headerText = this.add.text(0, 0, name, {
+              fontFamily: '"Press Start 2P"',
+              fontSize: '3px',
+              color: accentStr,
+            })
+          }
+
+          const snippet = text.length > 52 ? text.slice(0, 49) + '...' : text
+          const bodyY = headerText ? headerText.height + 3 : 0
+          const bodyText = this.add.text(0, bodyY, snippet, {
             fontFamily: '"Press Start 2P"',
-            fontSize: '3px',
-            color: '#f5d76e',
-            wordWrap: { width: 40 },
-            align: 'center',
-          }).setOrigin(0.5, 1)
+            fontSize: '4px',
+            color: '#ffffff',
+            wordWrap: { width: WRAP },
+          })
 
-          const b = label.getBounds()
-          const pad = 2
+          const contentW = Math.max(headerText?.width ?? 0, bodyText.width)
+          const contentH = bodyY + bodyText.height
+          const totalW = contentW + pad * 2
+          const totalH = contentH + pad * 2
+
+          if (headerText) headerText.setPosition(pad, -totalH + pad)
+          bodyText.setPosition(pad, -totalH + pad + bodyY)
+
           const bg = this.add.graphics()
-          bg.fillStyle(0x160e06, 0.9)
-          bg.fillRect(-b.width / 2 - pad, -b.height - pad, b.width + pad * 2, b.height + pad * 2)
-          bg.lineStyle(1, 0x6d5a2c, 1)
-          bg.strokeRect(-b.width / 2 - pad, -b.height - pad, b.width + pad * 2, b.height + pad * 2)
+          bg.fillStyle(0x0d0806, 0.96)
+          bg.fillRect(-totalW / 2, -totalH, totalW, totalH)
+          bg.lineStyle(1, accentInt, 1)
+          bg.strokeRect(-totalW / 2, -totalH, totalW, totalH)
 
-          const bubble = this.add.container(npc.sprite.x, npc.sprite.y - 8, [bg, label])
+          if (headerText) headerText.setX(headerText.x - totalW / 2)
+          bodyText.setX(bodyText.x - totalW / 2)
+
+          const items: Phaser.GameObjects.GameObject[] = headerText
+            ? [bg, headerText, bodyText]
+            : [bg, bodyText]
+
+          const bubble = this.add.container(npc.sprite.x, npc.sprite.y - 10, items)
           bubble.setDepth(npc.sprite.y + 1000)
           npc.bubble = bubble
 
           this.tweens.add({
             targets: bubble,
             alpha: 0,
-            delay: 2500,
+            delay: 3800,
             duration: 500,
             onComplete: () => {
               bubble.destroy()
@@ -301,22 +391,17 @@ export default function GameCanvas() {
 
           this.npcs.forEach(npc => {
             if (npc.bubble) {
-              npc.bubble.x = npc.sprite.x
-              npc.bubble.y = npc.sprite.y - 8
+              npc.bubble.setPosition(npc.sprite.x, npc.sprite.y - 10)
               npc.bubble.setDepth(npc.sprite.y + 1000)
             }
           })
 
           for (let i = 0; i < this.npcs.length; i++) {
             const a = this.npcs[i]
-            if (a.inConversation) continue
-            if (now - a.lastTalkedAt < CONVO_COOLDOWN_MS) continue
-
+            if (a.inConversation || now - a.lastTalkedAt < CONVO_COOLDOWN_MS) continue
             for (let j = i + 1; j < this.npcs.length; j++) {
               const b = this.npcs[j]
-              if (b.inConversation) continue
-              if (now - b.lastTalkedAt < CONVO_COOLDOWN_MS) continue
-
+              if (b.inConversation || now - b.lastTalkedAt < CONVO_COOLDOWN_MS) continue
               const dist = Math.hypot(a.sprite.x - b.sprite.x, a.sprite.y - b.sprite.y)
               if (dist <= CONVO_TRIGGER_PX) {
                 this.startConversation(i, j, this.roadWaypoints.length > 0 ? this.roadWaypoints : [{ x: 44, y: 44 }])
@@ -344,6 +429,7 @@ export default function GameCanvas() {
     init()
 
     return () => {
+      agentSpeakCleanup?.()
       game?.destroy(true)
     }
   }, [])

@@ -133,13 +133,13 @@ def plan_node(state: AgentState) -> AgentState:
             This round's events:
             {chr(10).join(f"- {e}" for e in state["round_events"])}
 
-            How do you feel now and what will you remember from this round?
+            How do you feel now? Respond in character — casual, human, like talking to a neighbor. Short sentences. No jargon.
             Return only a JSON object:
             {{
               "mood": "<optimistic|anxious|angry|neutral|hopeful>",
               "stance_delta": <float -0.2 to 0.2>,
-              "policy_opinion": "<one sentence explaining your current view on the policy>",
-              "new_memory": "<one sentence>",
+              "policy_opinion": "<what you'd say out loud to a neighbor, 8-12 words, casual and personal, first person, no formal language>",
+              "new_memory": "<one short casual sentence about what happened>",
               "importance": <float 1-10>
             }}"""
         }]

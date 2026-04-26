@@ -28,6 +28,8 @@ interface Indicators {
 export default function SimulationPage() {
   const router = useRouter()
   const [speed, setSpeed] = useState(1)
+  const [spawning, setSpawning] = useState(true)
+  const [spawnMsg, setSpawnMsg] = useState('Connecting...')
   const [month, setMonth] = useState(1)
   const [totalMonths, setTotalMonths] = useState(3)
   const [headline, setHeadline] = useState('SIMULATION RUNNING')
@@ -40,6 +42,19 @@ export default function SimulationPage() {
     businesses_open: 95,
   })
   const logRef = useRef<HTMLDivElement>(null)
+  const logQueue = useRef<LogEntry[]>([])
+  const drainTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  function scheduleDrain() {
+    const delay = 3000 + Math.random() * 2500
+    drainTimer.current = setTimeout(() => {
+      if (logQueue.current.length > 0) {
+        const entry = logQueue.current.shift()!
+        setLog(prev => [entry, ...prev].slice(0, 30))
+      }
+      scheduleDrain()
+    }, delay)
+  }
 
   useEffect(() => {
     const stored = sessionStorage.getItem('sim_headline')
@@ -49,10 +64,16 @@ export default function SimulationPage() {
   }, [])
 
   useEffect(() => {
+    scheduleDrain()
     connectSocket()
 
+    bridge.on('sim_status', (data: { status: string; message?: string }) => {
+      if (data.status === 'spawning') setSpawnMsg(data.message ?? 'Generating citizens...')
+      if (data.status === 'running') setSpawning(false)
+    })
+
     bridge.on('agent_speak', (data: LogEntry) => {
-      setLog(prev => [data, ...prev].slice(0, 30))
+      logQueue.current.push(data)
     })
 
     bridge.on('economic_update', (data: { round: number; unemployment: number; social_unrest: number; gov_approval: number; prices: number; businesses_open: number }) => {
@@ -72,6 +93,7 @@ export default function SimulationPage() {
     })
 
     return () => {
+      if (drainTimer.current) clearTimeout(drainTimer.current)
       bridge.removeAllListeners()
       disconnectSocket()
     }
@@ -82,18 +104,25 @@ export default function SimulationPage() {
 
       <GameCanvas />
 
+      {spawning && (
+        <div className="absolute inset-0 z-50 flex flex-col items-center justify-center" style={{ background: 'rgba(10, 6, 2, 0.82)' }}>
+          <p className="pixel-text text-[1.4rem] mb-6" style={{ color: '#f5d76e', textShadow: '0 4px 0 #7c5200, 0 6px 0 #000' }}>REPLICARRIA</p>
+          <p className="pixel-text text-[11px] animate-pulse" style={{ color: '#d4ccb0', textShadow: '0 2px 0 #000' }}>{spawnMsg}</p>
+          <div className="flex gap-2 mt-4">
+            {[0,1,2].map(i => (
+              <div key={i} className="w-2 h-2 rounded-full animate-pulse" style={{ background: '#6d5a2c', animationDelay: `${i * 0.3}s` }} />
+            ))}
+          </div>
+        </div>
+      )}
+
       <div className="absolute top-0 left-0 w-48 flex flex-col gap-2 p-3" style={{ background: 'rgba(22, 14, 6, 0.78)', borderRight: '2px solid #6d5a2c', borderBottom: '2px solid #6d5a2c', boxShadow: 'inset -1px 0 0 #000' }}>
         <p className="pixel-text text-[9px]" style={{ color: '#f5d76e', textShadow: '0 2px 0 #7c5200, 0 3px 0 #000' }}>EVENT LOG</p>
         <div ref={logRef} className="log-scroll flex flex-col gap-3 overflow-y-auto" style={{ maxHeight: '280px' }}>
-          {log.length === 0 ? (
-            <>
-              <EventEntry name="Maria Santos" role="Factory Worker" text="This policy is going to hurt people like us." mood="anxious" />
-              <EventEntry name="James Okafor" role="Small Business" text="Finally, something that helps the economy." mood="hopeful" />
-              <EventEntry name="Priya Nair" role="Healthcare Worker" text="We need more support, not less." mood="frustrated" />
-            </>
-          ) : (
-            log.map((e, i) => <EventEntry key={i} {...e} />)
-          )}
+          {log.length === 0
+            ? <p className="pixel-text text-[8px]" style={{ color: '#3a3020' }}>WAITING FOR AGENTS...</p>
+            : log.map((e, i) => <EventEntry key={i} {...e} />)
+          }
         </div>
       </div>
 

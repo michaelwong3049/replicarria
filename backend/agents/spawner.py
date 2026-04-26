@@ -64,9 +64,9 @@ async def spawn_single_agent(policy: PolicyContext, archetype: str, layer: Liter
             - political_lean: float -1.0 to 1.0 (left to right)
             - economic_outlook: float -1.0 to 1.0 (dire to optimistic)
             - policy_stance: float -1.0 to 1.0 (oppose to support, based on how this policy affects them)
-            - policy_opinion: string (one sentence explaining why they hold that stance)
+            - policy_opinion: string (what you'd say to a neighbor about this, 8-12 words, casual first-person, no jargon — e.g. "This is gonna hit my wallet hard, I just know it")
             - mood: one of "optimistic", "anxious", "angry", "neutral", "hopeful"
-            - starting_memory: string (one sentence — their first reaction to hearing about this policy)
+            - starting_memory: string (one short casual sentence — your gut reaction when you first heard about this)
 
             Return only valid JSON, no other text."""
         }]
@@ -147,10 +147,14 @@ async def spawn_agents(n: int, policy: PolicyContext) -> dict[str, Agent]:
     archetypes = distribute_archetypes(n, policy["affected_archetypes"])
     layers = distribute_layers(n)
 
-    agents = await asyncio.gather(*[
-        spawn_single_agent(policy, archetypes[i], layers[i])
-        for i in range(n)
-    ])
+    agents = []
+    for i in range(n):
+        try:
+            agent = await spawn_single_agent(policy, archetypes[i], layers[i])
+            agents.append(agent)
+        except Exception as e:
+            print(f"[spawn] agent {i} failed: {e}")
+        await asyncio.sleep(0.5)
 
     return {agent.id: agent for agent in agents}
 

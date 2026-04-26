@@ -19,7 +19,7 @@ app = socketio.ASGIApp(sio, fastapi_app)
 
 class SimulateRequest(BaseModel):
     policy_text: str
-    n_agents: int = 12
+    n_agents: int = 7
     months: int = 3
     use_memory: bool = False
     speed: float = 1.0
@@ -54,8 +54,12 @@ async def stream_simulation(body: SimulateRequest):
         from agents.loop import agent_graph
         from agents.runner import build_round_events
 
+        await sio.emit('sim_status', {'status': 'spawning', 'message': f'Generating {body.n_agents} citizens...'})
+
         policy = await parse_policy(body.policy_text, source='text')
         agents_by_id = await spawn_agents(body.n_agents, policy)
+
+        await sio.emit('sim_status', {'status': 'running'})
 
         round_seconds = 60.0 / body.speed
         n_agents = len(agents_by_id)
@@ -69,13 +73,15 @@ async def stream_simulation(body: SimulateRequest):
         for round_num in range(1, body.months + 1):
             round_events = build_round_events(round_num, policy)
 
-            await asyncio.gather(*[
-                agent_graph.ainvoke(
-                    {"round_events": round_events},
-                    config={"configurable": {"thread_id": agent_id}}
-                )
-                for agent_id in agents_by_id
-            ])
+            for agent_id in agents_by_id:
+                try:
+                    await agent_graph.ainvoke(
+                        {"round_events": round_events},
+                        config={"configurable": {"thread_id": agent_id}}
+                    )
+                except Exception as e:
+                    print(f"[agent {agent_id}] round {round_num} error: {e}")
+                await asyncio.sleep(0.4)
 
             stances = []
             for agent_id, agent in agents_by_id.items():
@@ -96,7 +102,7 @@ async def stream_simulation(body: SimulateRequest):
                     'text': v.get("policy_opinion", ""),
                     'mood': v.get("mood", "neutral"),
                 })
-                await asyncio.sleep(0.3)
+                await asyncio.sleep(0.1)
 
             if stances:
                 avg_stance = sum(stances) / len(stances)
@@ -130,10 +136,32 @@ async def stream_simulation(body: SimulateRequest):
         final_stance = sum(stances) / len(stances) if stances else 0.0
         verdict = "positive" if final_stance > 0.2 else "negative" if final_stance < -0.2 else "mixed"
 
+        try:
+            from anthropic import Anthropic
+            _client = Anthropic()
+            opinions = []
+            for agent_id, agent in agents_by_id.items():
+                state = agent_graph.get_state({"configurable": {"thread_id": agent_id}})
+                if state.values:
+                    opinions.append(f"{state.values.get('name','?')} ({state.values.get('occupation','?')}): {state.values.get('policy_opinion','')}")
+            opinion_text = "\n".join(opinions[:6])
+            narrative_resp = _client.messages.create(
+                model="claude-haiku-4-5-20251001",
+                max_tokens=180,
+                messages=[{"role": "user", "content": f"""Write 2 short punchy sentences summarizing this policy simulation. Be vivid and story-like, not dry.
+Policy: {body.policy_text[:150]}
+Outcome: {verdict} — unemployment {round(unemployment,1)}%, approval {round(gov_approval,1)}%, unrest {round(social_unrest,1)}
+Citizen voices:\n{opinion_text}
+No bullet points. No headers. Just the narrative."""}]
+            )
+            narrative = narrative_resp.content[0].text.strip() if narrative_resp.content else ""
+        except Exception:
+            narrative = f"After {body.months} months, the city responded with a {verdict} verdict on this policy."
+
         await sio.emit('simulation_end', {
             'type': 'simulation_end',
             'verdict': verdict,
-            'summary': f"After {body.months} months, the policy resulted in a {verdict} outcome.",
+            'summary': narrative,
             'key_moments': [],
             'final_indices': {
                 'unemployment': round(unemployment, 1),
