@@ -8,10 +8,11 @@ class AgentIdentity(TypedDict):
     id: str
     name: str
     age: int
+    photo_url: str
     occupation: str
     income_bracket: Literal["low", "middle", "high"]
     layer: Literal["sky", "surface", "underground", "deep"]
-    npc_class: str              # "merchant", "nurse", "engineer", etc.
+    npc_class: str
 
 class AgentPersonality(TypedDict):
     description: str            # "stubborn and pragmatic"
