@@ -3,6 +3,7 @@ import json
 import uuid
 import random
 import os
+import httpx
 import anthropic
 from anthropic.types import TextBlock
 from typing import Literal
@@ -54,14 +55,63 @@ def distribute_political_hints(n: int) -> list[str]:
     return random.choices(POLITICAL_HINTS, weights=POLITICAL_WEIGHTS, k=n)
 
 
-async def spawn_single_agent(policy: PolicyContext, archetype: str, layer: Literal["sky", "surface", "underground", "deep"], political_hint: str, thread_id: str | None = None) -> tuple[str, Agent]:
+FALLBACK_PROFILES = [
+    {"name": "Sofia Reyes", "photo_url": "", "age": 34, "nationality": "MX"},
+    {"name": "James Okafor", "photo_url": "", "age": 41, "nationality": "NG"},
+    {"name": "Priya Sharma", "photo_url": "", "age": 29, "nationality": "IN"},
+    {"name": "Carlos Mendoza", "photo_url": "", "age": 52, "nationality": "US"},
+    {"name": "Fatima Hassan", "photo_url": "", "age": 38, "nationality": "EG"},
+    {"name": "David Kowalski", "photo_url": "", "age": 45, "nationality": "PL"},
+    {"name": "Maria Santos", "photo_url": "", "age": 31, "nationality": "BR"},
+    {"name": "Kwame Asante", "photo_url": "", "age": 27, "nationality": "GH"},
+    {"name": "Yuki Tanaka", "photo_url": "", "age": 36, "nationality": "JP"},
+    {"name": "Amir Khalil", "photo_url": "", "age": 48, "nationality": "LB"},
+    {"name": "Zoe Nkrumah", "photo_url": "", "age": 23, "nationality": "GH"},
+    {"name": "Tomasz Wiśniewski", "photo_url": "", "age": 55, "nationality": "PL"},
+]
+
+
+async def fetch_personas(n: int) -> list[dict]:
+    try:
+        async with httpx.AsyncClient(timeout=8.0) as client_http:
+            r = await client_http.get(
+                f"https://randomuser.me/api/?results={n}&nat=us,gb,mx,br,in,ng,fr,de,au,ca,eg,pl,gh"
+            )
+            users = r.json()["results"]
+            return [{
+                "name": f"{u['name']['first']} {u['name']['last']}",
+                "photo_url": u["picture"]["medium"],
+                "age": u["dob"]["age"],
+                "nationality": u["nat"],
+            } for u in users]
+    except Exception as e:
+        print(f"[randomuser] API failed ({e}), using fallback names")
+        shuffled = FALLBACK_PROFILES.copy()
+        random.shuffle(shuffled)
+        return (shuffled * ((n // len(shuffled)) + 1))[:n]
+
+
+async def spawn_single_agent(
+    policy: PolicyContext,
+    archetype: str,
+    layer: Literal["sky", "surface", "underground", "deep"],
+    political_hint: str,
+    thread_id: str | None = None,
+    profile: dict | None = None,
+) -> tuple[str, Agent]:
+    name = profile["name"] if profile else "Alex Jordan"
+    age = profile["age"] if profile else 35
+    photo_url = profile.get("photo_url", "") if profile else ""
+    nationality = profile.get("nationality", "US") if profile else "US"
+
     response = client.messages.create(
         model="claude-haiku-4-5-20251001",
         max_tokens=512,
         messages=[{
             "role": "user",
-            "content": f"""Generate a real city resident who has just heard about a policy or news event. They are a normal person with a real job, not a fantasy character.
+            "content": f"""This person just heard about a policy or news event. Fill in their reaction.
 
+            Name: {name} (age {age}, from {nationality})
             Economic role: {archetype}
             Neighborhood: {layer}
             Political orientation: {political_hint}
@@ -69,19 +119,17 @@ async def spawn_single_agent(policy: PolicyContext, archetype: str, layer: Liter
             Groups most affected: {", ".join(policy["affected_archetypes"])}
 
             Return a JSON object with exactly these fields:
-            - name: string (a realistic first + last name — pick from genuinely diverse backgrounds: Latino, Black American, South Asian, Middle Eastern, Eastern European, Southeast Asian, West African, etc. Do NOT use Chen, Kim, Wang, or other overused placeholder names. Each agent in this simulation must have a unique name.)
-            - age: integer (18-70)
-            - occupation: string (a specific real-world job title matching the economic role, e.g. "auto mechanic" → "Auto Repair Technician", "nurse" → "Pediatric Nurse", "small business owner" → "Taqueria Owner")
+            - occupation: string (a specific real job title matching the economic role, e.g. "Auto Repair Technician", "Pediatric Nurse", "Taqueria Owner")
             - income_bracket: one of "low", "middle", "high"
-            - personality_description: string (2-4 words describing their character, e.g. "blunt and skeptical")
+            - personality_description: string (2-4 words, e.g. "blunt and skeptical")
             - communication_style: one of "aggressive", "passive", "persuasive", "logical"
             - emotional_volatility: float 0.0-1.0
             - political_lean: float -1.0 to 1.0 (left to right)
             - economic_outlook: float -1.0 to 1.0 (dire to optimistic)
-            - policy_stance: float -1.0 to 1.0 (how this policy personally affects someone in their situation — right-leaning people often start positive on pro-business/deregulation news, left-leaning people often start negative; but the archetype and actual policy content matters most — a factory worker benefits from tariffs, a consumer is hurt by them)
-            - policy_opinion: string (their gut reaction as a real person — how does this hit THEIR wallet, neighborhood, job security, or community? 8-12 words, first person, casual, emotional — NOT "doesn't affect me". MUST reflect their political orientation AND the actual economic impact: right-leaning may see opportunity or bristle at overreach; left-leaning may see protection for workers or corporate handout; centrist just does the math on their own life.)
+            - policy_stance: float -1.0 to 1.0 (how this policy personally affects them — a factory worker may benefit from tariffs, a consumer is hurt by them; right-leaning may see opportunity; left-leaning may see a threat to workers)
+            - policy_opinion: string (their gut reaction — how does this hit THEIR wallet, job, neighborhood? 8-12 words, first person, casual, concrete — reflects their political orientation and real economic impact)
             - mood: one of "optimistic", "anxious", "angry", "neutral", "hopeful"
-            - starting_memory: string (one casual sentence about what this news means for their daily life)
+            - starting_memory: string (one blunt casual sentence about what this means for their daily life)
 
             Return only valid JSON, no other text."""
         }]
@@ -107,8 +155,9 @@ async def spawn_single_agent(policy: PolicyContext, archetype: str, layer: Liter
     agent = Agent(
         identity=AgentIdentity(
             id=agent_id,
-            name=d["name"],
-            age=d["age"],
+            name=name,
+            age=age,
+            photo_url=photo_url,
             occupation=d["occupation"],
             income_bracket=d["income_bracket"],
             layer=layer,
@@ -175,12 +224,15 @@ async def spawn_agents(n: int, policy: PolicyContext, use_memory: bool = False) 
     archetypes = distribute_archetypes(n, policy["affected_archetypes"])
     layers = distribute_layers(n)
     political_hints = distribute_political_hints(n)
+    profiles = await fetch_personas(n)
 
     agents_by_thread: dict[str, Agent] = {}
     for i in range(n):
         try:
             tid = f"living_city_{i}" if use_memory else None
-            thread_id, agent = await spawn_single_agent(policy, archetypes[i], layers[i], political_hints[i], tid)
+            thread_id, agent = await spawn_single_agent(
+                policy, archetypes[i], layers[i], political_hints[i], tid, profiles[i]
+            )
             agents_by_thread[thread_id] = agent
         except Exception as e:
             print(f"[spawn] agent {i} failed: {e}")

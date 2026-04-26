@@ -33,6 +33,7 @@ export default function ReportPage() {
     const raw = sessionStorage.getItem('sim_result')
     const h = sessionStorage.getItem('sim_headline') ?? 'POLICY SIMULATION'
     if (raw) {
+      sessionStorage.removeItem('sim_result')
       const parsed = JSON.parse(raw)
       setResult(parsed)
       setHeadline(h)

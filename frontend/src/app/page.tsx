@@ -122,6 +122,15 @@ export default function Home() {
                 })}
               </div>
             )}
+            {pastSims.length > 0 && (
+              <button
+                className="pixel-text text-[9px] text-center"
+                style={{ color: '#4a3020', cursor: 'pointer', textDecoration: 'underline' }}
+                onClick={() => { localStorage.removeItem('past_simulations'); setPastSims([]) }}
+              >
+                CLEAR HISTORY
+              </button>
+            )}
             <BackButton onClick={() => setScreen('menu')} />
           </div>
         )}
@@ -136,7 +145,7 @@ export default function Home() {
                 WATCH CITIZENS DEBATE, ADAPT, AND RESHAPE THEIR CITY IN REAL TIME.
               </p>
               <p className="pixel-text text-[9px]" style={{ color: '#a89060', textShadow: '0 2px 0 #000' }}>
-                BUILT AT A HACKATHON WITH LANGGRAPH + OLLAMA + PHASER 3
+                BUILT AT A HACKATHON WITH LANGGRAPH + ANTHROPIC + PHASER 3
               </p>
             </div>
             <BackButton onClick={() => setScreen('menu')} />
