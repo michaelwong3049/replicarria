@@ -31,8 +31,15 @@ export default function ReportPage() {
 
   useEffect(() => {
     const raw = sessionStorage.getItem('sim_result')
-    if (raw) setResult(JSON.parse(raw))
-    const h = sessionStorage.getItem('sim_headline')
+    const h = sessionStorage.getItem('sim_headline') ?? 'POLICY SIMULATION'
+    if (raw) {
+      const parsed = JSON.parse(raw)
+      setResult(parsed)
+      setHeadline(h)
+      const existing = JSON.parse(localStorage.getItem('past_simulations') ?? '[]')
+      const entry = { headline: h, date: new Date().toISOString(), ...parsed }
+      localStorage.setItem('past_simulations', JSON.stringify([entry, ...existing].slice(0, 10)))
+    }
     if (h) setHeadline(h)
   }, [])
 

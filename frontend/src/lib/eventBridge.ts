@@ -16,3 +16,7 @@ export function disconnectSocket() {
   socket?.disconnect()
   socket = null
 }
+
+export function sendToServer(event: string, data: unknown) {
+  socket?.emit(event, data)
+}

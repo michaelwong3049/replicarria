@@ -16,6 +16,8 @@ fastapi_app.include_router(news_router)
 sio = socketio.AsyncServer(async_mode='asgi', cors_allowed_origins='*')
 app = socketio.ASGIApp(sio, fastapi_app)
 
+_sim_speed = {"value": 1.0}
+
 
 class SimulateRequest(BaseModel):
     policy_text: str
@@ -38,8 +40,20 @@ async def start_simulation_upload(
     use_memory: bool = Form(False),
 ):
     contents = await file.read()
+    filename = file.filename or ''
+    if filename.lower().endswith('.pdf'):
+        try:
+            import pdfplumber, io
+            with pdfplumber.open(io.BytesIO(contents)) as pdf:
+                pages = [p.extract_text() or '' for p in pdf.pages[:12]]
+            text = '\n\n'.join(p for p in pages if p.strip())
+        except Exception as e:
+            print(f'[pdf] parse error: {e}')
+            text = contents.decode('utf-8', errors='ignore')
+    else:
+        text = contents.decode('utf-8', errors='ignore')
     body = SimulateRequest(
-        policy_text=contents.decode('utf-8', errors='ignore'),
+        policy_text=text[:6000],
         months=months,
         use_memory=use_memory,
     )
@@ -53,27 +67,34 @@ async def stream_simulation(body: SimulateRequest):
         from agents.spawner import spawn_agents
         from agents.loop import agent_graph
         from agents.runner import build_round_events
+        from agents.opinion_dynamics import apply_deffuant, push_stances, social_influence_event
 
         await sio.emit('sim_status', {'status': 'spawning', 'message': f'Generating {body.n_agents} citizens...'})
 
         policy = await parse_policy(body.policy_text, source='text')
-        agents_by_id = await spawn_agents(body.n_agents, policy)
+        agents_by_id = await spawn_agents(body.n_agents, policy, use_memory=body.use_memory)
 
-        await sio.emit('sim_status', {'status': 'running'})
+        await sio.emit('sim_status', {'status': 'running', 'message': 'Citizens forming opinions...'})
 
-        round_seconds = 60.0 / body.speed
-        n_agents = len(agents_by_id)
+        _sim_speed["value"] = body.speed
 
         unemployment = 5.4
         social_unrest = 12.0
         gov_approval = 56.0
         prices = 2.1
         businesses_open = 95.0
+        social_event = ""
+        stances: list[float] = []
+        key_moments: list[dict] = []
 
         for round_num in range(1, body.months + 1):
             round_events = build_round_events(round_num, policy)
+            if social_event:
+                round_events.append(social_event)
 
-            for agent_id in agents_by_id:
+            stances = []
+            round_notable: list[dict] = []
+            for agent_id, agent in agents_by_id.items():
                 try:
                     await agent_graph.ainvoke(
                         {"round_events": round_events},
@@ -81,15 +102,16 @@ async def stream_simulation(body: SimulateRequest):
                     )
                 except Exception as e:
                     print(f"[agent {agent_id}] round {round_num} error: {e}")
-                await asyncio.sleep(0.4)
 
-            stances = []
-            for agent_id, agent in agents_by_id.items():
                 state = agent_graph.get_state({"configurable": {"thread_id": agent_id}})
                 if not state.values:
+                    await asyncio.sleep(0.3)
                     continue
                 v = state.values
-                stances.append(v.get("policy_stance", 0.0))
+                stance = v.get("policy_stance", 0.0)
+                mood = v.get("mood", "neutral")
+                opinion = v.get("policy_opinion", "")
+                stances.append(stance)
 
                 await sio.emit('agent_speak', {
                     'type': 'agent_speak',
@@ -99,10 +121,26 @@ async def stream_simulation(body: SimulateRequest):
                     'photo_url': agent.identity.get('photo_url', ''),
                     'x': agent.position['x'],
                     'y': agent.position['y'],
-                    'text': v.get("policy_opinion", ""),
-                    'mood': v.get("mood", "neutral"),
+                    'text': opinion,
+                    'mood': mood,
                 })
-                await asyncio.sleep(0.1)
+                await asyncio.sleep(0.3)
+
+                if mood in ("angry", "anxious", "hopeful", "optimistic") and opinion:
+                    round_notable.append({
+                        "round": round_num,
+                        "agent": v.get("name", agent.identity['name']),
+                        "quote": opinion,
+                        "weight": abs(stance),
+                    })
+
+            if round_notable:
+                round_notable.sort(key=lambda x: x["weight"], reverse=True)
+                seen_agents = {m["agent"] for m in key_moments}
+                for candidate in round_notable:
+                    if candidate["agent"] not in seen_agents:
+                        key_moments.append({k: candidate[k] for k in candidate if k != "weight"})
+                        break
 
             if stances:
                 avg_stance = sum(stances) / len(stances)
@@ -114,10 +152,14 @@ async def stream_simulation(body: SimulateRequest):
                 upset = sum(1 for m in moods if m in ("angry", "anxious")) / max(len(moods), 1)
 
                 gov_approval = max(0, min(100, (avg_stance + 1) / 2 * 100))
-                social_unrest = min(100, upset * 100 + round_num * 2)
-                unemployment = max(0, 5.4 - avg_stance * 3 + round_num * 0.3)
-                prices = max(0, 2.1 + (1 - avg_stance) * 0.5 * round_num)
-                businesses_open = max(0, 95 - social_unrest * 0.2)
+                social_unrest = min(100, upset * 80 + (1 - abs(avg_stance)) * 15)
+                unemployment = max(0, 5.4 - avg_stance * 4)
+                prices = max(0, 2.1 + (1 - avg_stance) * 1.2)
+                businesses_open = max(0, min(100, 95 + avg_stance * 8 - upset * 10))
+
+                new_stances = apply_deffuant(list(agents_by_id.keys()))
+                push_stances(new_stances)
+                social_event = social_influence_event(new_stances)
 
             await sio.emit('economic_update', {
                 'type': 'economic_update',
@@ -130,8 +172,7 @@ async def stream_simulation(body: SimulateRequest):
                 'businesses_open': round(businesses_open, 1),
             })
 
-            if round_num < body.months:
-                await asyncio.sleep(round_seconds)
+            await asyncio.sleep(15.0 / _sim_speed["value"])
 
         final_stance = sum(stances) / len(stances) if stances else 0.0
         verdict = "positive" if final_stance > 0.2 else "negative" if final_stance < -0.2 else "mixed"
@@ -162,7 +203,7 @@ No bullet points. No headers. Just the narrative."""}]
             'type': 'simulation_end',
             'verdict': verdict,
             'summary': narrative,
-            'key_moments': [],
+            'key_moments': key_moments[-3:],
             'final_indices': {
                 'unemployment': round(unemployment, 1),
                 'social_unrest': round(social_unrest, 1),
@@ -176,6 +217,31 @@ No bullet points. No headers. Just the narrative."""}]
         import traceback
         traceback.print_exc()
         await sio.emit('error', {'message': str(e)})
+
+
+@sio.event
+async def speed_change(sid, data):
+    try:
+        _sim_speed["value"] = float(data)
+    except Exception:
+        pass
+
+
+@sio.event
+async def converse_request(sid, data):
+    try:
+        from agents.conversation import resolve_conversation
+        aid_a = data.get('agent_id_a')
+        aid_b = data.get('agent_id_b')
+        result = await resolve_conversation(aid_a, aid_b)
+        if result:
+            a_line, b_line, a_reply, b_reply = result
+            await sio.emit('converse_response', {'a_line': a_line, 'b_line': b_line, 'a_reply': a_reply, 'b_reply': b_reply}, to=sid)
+        else:
+            await sio.emit('converse_response', {'a_line': '', 'b_line': ''}, to=sid)
+    except Exception as e:
+        print(f"[converse] {e}")
+        await sio.emit('converse_response', {'a_line': '', 'b_line': ''}, to=sid)
 
 
 @sio.event

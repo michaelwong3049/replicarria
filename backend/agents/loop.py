@@ -20,6 +20,8 @@ class AgentState(TypedDict):
     personality: str
     communication_style: str
     emotional_volatility: float
+    income_bracket: str
+    political_lean: float
     mood: str
     policy_stance: float
     policy_opinion: str
@@ -113,33 +115,54 @@ def plan_node(state: AgentState) -> AgentState:
 
     recent_reflections = state["reflections"][-2:] if state["reflections"] else []
 
+    lean = state.get("political_lean", 0.0)
+    if lean > 0.3:
+        lean_voice = (
+            "RIGHT-LEANING. Your gut: government overreach, let businesses breathe, taxes already too high, markets work if left alone. "
+            "Words you use: 'bureaucrats', 'red tape', 'my business', 'compete', 'freedom', 'enough taxes'. "
+            "You may see THIS as opportunity OR as government meddling — pick the angle that fits your job."
+        )
+    elif lean < -0.3:
+        lean_voice = (
+            "LEFT-LEANING. Your gut: corporations win again, workers get squeezed, inequality is the real problem, community needs investment. "
+            "Words you use: 'working people', 'the rich', 'can't afford', 'my neighborhood', 'exploitation', 'fair shot'. "
+            "You see WHO benefits from this — and you're pretty sure it's not people like you."
+        )
+    else:
+        lean_voice = (
+            "PRAGMATIST. Zero ideology — you just do the math on YOUR life: rent, grocery bill, job security, kids' school. "
+            "Words you use: 'my rent', 'my paycheck', 'prices', 'my job', 'can I afford'. "
+            "Skip the politics, just tell us if your wallet is better or worse."
+        )
+
     response = client.messages.create(
         model="claude-haiku-4-5-20251001",
         max_tokens=300,
         messages=[{
             "role": "user",
-            "content": f"""You are {state["name"]}, a {state["occupation"]}.
-            Personality: {state["personality"]}. Communication style: {state["communication_style"]}.
-            Emotional volatility: {state["emotional_volatility"]} (0=stoic, 1=reactive).
-            Current mood: {state["mood"]}. Current policy stance: {state["policy_stance"]} (-1=oppose, 1=support).
-            Policy: {state["policy_summary"]}
+            "content": f"""You are {state["name"]}, {state["occupation"]}, {state.get("income_bracket","middle")} income.
+            Political voice: {lean_voice}
+            Personality: {state["personality"]}. Mood right now: {state["mood"]}.
+            Stance: {state["policy_stance"]} (-1=strongly against, 1=strongly for).
+            Situation: {state["policy_summary"]}
 
-            Your relevant memories:
-            {chr(10).join(f"- {m}" for m in state["top_memories"])}
+            What just happened this round: {chr(10).join(f"- {e}" for e in state["round_events"])}
+            Your memories: {chr(10).join(f"- {m}" for m in state["top_memories"])}
 
-            Your current beliefs:
-            {chr(10).join(f"- {r}" for r in recent_reflections)}
+            Your PREVIOUS take was: "{state["policy_opinion"]}"
+            Has anything changed for you this round? If yes, update your opinion — say something NEW based on what just happened. If no, shift the angle slightly — same worldview, different specific worry or hope.
+            Do NOT restate the same sentence. Find a new concrete detail.
 
-            This round's events:
-            {chr(10).join(f"- {e}" for e in state["round_events"])}
+            WRITE AS THIS PERSON, NOT AS AN AI.
+            BANNED WORDS: "policy", "impacts", "affects", "significant", "concern", "important"
+            REQUIRED: one concrete anchor (dollar amount, your job, specific fear or hope, something real).
 
-            How do you feel now? Respond in character — casual, human, like talking to a neighbor. Short sentences. No jargon.
-            Return only a JSON object:
+            Return only valid JSON:
             {{
               "mood": "<optimistic|anxious|angry|neutral|hopeful>",
-              "stance_delta": <float -0.2 to 0.2>,
-              "policy_opinion": "<what you'd say out loud to a neighbor, 8-12 words, casual and personal, first person, no formal language>",
-              "new_memory": "<one short casual sentence about what happened>",
+              "stance_delta": <float -0.3 to 0.3>,
+              "policy_opinion": "<8-12 words, first person, casual, concrete — something NEW from last round>",
+              "new_memory": "<one blunt casual sentence about what this means for your actual daily life>",
               "importance": <float 1-10>
             }}"""
         }]
@@ -186,8 +209,6 @@ def should_reflect_edge(state: AgentState) -> str:
 
 # ── Graph ─────────────────────────────────────────────────────
 
-checkpointer = MemorySaver()
-
 _builder = StateGraph(AgentState)
 _builder.add_node("retrieve", retrieve_node)
 _builder.add_node("perceive", perceive_node)
@@ -200,5 +221,5 @@ _builder.add_conditional_edges("perceive", should_reflect_edge, {"reflect": "ref
 _builder.add_edge("reflect", "plan")
 _builder.add_edge("plan", END)
 
-agent_graph = _builder.compile(checkpointer=checkpointer)
+agent_graph = _builder.compile(checkpointer=MemorySaver())
 

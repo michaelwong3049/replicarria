@@ -8,6 +8,14 @@ const SCAN_SOURCES = ['Reuters', 'BBC News', 'AP News']
 type Screen = 'menu' | 'source' | 'scanning' | 'headlines' | 'upload' | 'configure' | 'history' | 'about'
 type Memory = 'fresh' | 'living'
 
+interface PastSim {
+  headline: string
+  date: string
+  verdict: string
+  summary: string
+  final_indices: { unemployment: number; social_unrest: number; gov_approval: number; prices: number; businesses_open: number }
+}
+
 export default function Home() {
   const router = useRouter()
   const [screen, setScreen] = useState<Screen>('menu')
@@ -17,6 +25,11 @@ export default function Home() {
   const [uploadedFile, setUploadedFile] = useState<File | null>(null)
   const [memory, setMemory] = useState<Memory>('fresh')
   const [duration, setDuration] = useState(3)
+  const [pastSims, setPastSims] = useState<PastSim[]>([])
+
+  useEffect(() => {
+    setPastSims(JSON.parse(localStorage.getItem('past_simulations') ?? '[]'))
+  }, [])
 
   useEffect(() => {
     if (screen !== 'scanning') return
@@ -86,8 +99,29 @@ export default function Home() {
         )}
 
         {screen === 'history' && (
-          <div className="flex flex-col items-center gap-4">
-            <p className="pixel-text text-[12px]" style={{ color: '#4a4030' }}>NO PAST SIMULATIONS YET</p>
+          <div className="flex flex-col gap-3 w-full">
+            {pastSims.length === 0 ? (
+              <p className="pixel-text text-[10px] text-center" style={{ color: '#4a4030' }}>NO PAST SIMULATIONS YET</p>
+            ) : (
+              <div className="flex flex-col gap-2 overflow-y-auto" style={{ maxHeight: '60vh' }}>
+                {pastSims.map((s, i) => {
+                  const verdictColor = s.verdict === 'positive' ? '#6aaa50' : s.verdict === 'negative' ? '#e07050' : '#d4943a'
+                  return (
+                    <div key={i} className="pixel-card p-3 flex flex-col gap-1" style={{ borderColor: verdictColor }}>
+                      <span className="pixel-text text-[9px]" style={{ color: '#6a5a30' }}>
+                        {new Date(s.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+                      </span>
+                      <span className="pixel-text text-[10px] leading-relaxed" style={{ color: '#d4c080' }}>
+                        {s.headline.length > 60 ? s.headline.slice(0, 60) + '…' : s.headline}
+                      </span>
+                      <span className="pixel-text text-[9px]" style={{ color: verdictColor }}>
+                        {s.verdict.toUpperCase()} — approval {s.final_indices.gov_approval.toFixed(0)}% / unrest {s.final_indices.social_unrest.toFixed(0)}
+                      </span>
+                    </div>
+                  )
+                })}
+              </div>
+            )}
             <BackButton onClick={() => setScreen('menu')} />
           </div>
         )}
@@ -217,7 +251,7 @@ export default function Home() {
                 await fetch('http://localhost:8000/simulate', {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ policy_text: selectedHeadline ?? '', months: duration, use_memory: memory === 'living' }),
+                  body: JSON.stringify({ policy_text: selectedHeadline ?? '', months: duration, use_memory: memory === 'living', speed: 1.0 }),
                 }).catch(() => {})
               }
               router.push('/simulation')
